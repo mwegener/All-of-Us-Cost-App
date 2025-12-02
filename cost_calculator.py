@@ -1,5 +1,7 @@
 import streamlit as st
 
+st.set_page_config(page_title="All of Us Cost Estimator")
+
 # Define constants
 SAMPLE_EXTRACTION_COST = 0.02
 CROMWELL_HOURLY = 0.375
