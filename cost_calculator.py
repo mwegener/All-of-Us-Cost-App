@@ -1,3 +1,5 @@
+st.set_page_config(page_title="All of Us Cost Estimator")
+
 import streamlit as st
 
 # Define constants
