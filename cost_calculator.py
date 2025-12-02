@@ -1,7 +1,5 @@
 import streamlit as st
 
-st.set_page_config(page_title="All of Us Cost Estimator")
-
 # Define constants
 SAMPLE_EXTRACTION_COST = 0.02
 CROMWELL_HOURLY = 0.375
@@ -199,7 +197,7 @@ def calculate_costs(apps, analysis_type, num_samples, storage, analysis_hours, p
     }
 
 def main():
-    st.title("Cloud Computing Cost Calculator")
+    st.title("All of Us Cloud Computing Cost Calculator")
 
     # Sidebar inputs
     st.sidebar.header("Input Parameters")
