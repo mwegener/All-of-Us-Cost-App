@@ -438,90 +438,97 @@ def main():
 
     # Detailed breakdown
     with st.expander("View Detailed Cost Breakdown"):
-  # Add the hourly cost breakdown at the start
-        st.write("Cost Per Analysis Hour Breakdown:")
-        total_hourly_cost = 0
-
-        # Calculate monthly hours ratio for fixed costs
-        monthly_ratio = analysis_hours / 730 if analysis_hours > 0 else 0  # 730 hours in average month
+        st.write("Hourly Running Costs (Direct Costs):")
+        direct_hourly_cost = 0
 
         for app in apps:
-            st.write(f"\n{app} hourly costs:")
+            st.write(f"\n{app}:")
             if app == "Jupyter Notebooks":
                 # VM running cost
                 vm_cost = JUPYTER_VM_CONFIGS[jupyter_config]['running']
-                st.write(f"- VM running cost: ${vm_cost:.2f}/hr")
-                total_hourly_cost += vm_cost
-
-                # VM paused cost distributed across analysis hours
-                if paused_hours > 0:
-                    paused_cost = (JUPYTER_VM_CONFIGS[jupyter_config]['paused'] * paused_hours) / analysis_hours
-                    st.write(f"- VM paused cost (distributed): ${paused_cost:.2f}/hr")
-                    total_hourly_cost += paused_cost
-
-                # Storage cost distributed across analysis hours
-                if not delete_environment:
-                    storage_hourly = (APP_COSTS[app]['storage']) * monthly_ratio
-                    st.write(f"- Storage cost (distributed): ${storage_hourly:.2f}/hr")
-                    total_hourly_cost += storage_hourly
+                st.write(f"- VM cost: ${vm_cost:.2f}/hr")
+                direct_hourly_cost += vm_cost
 
                 # GPU costs if applicable
                 if jupyter_gpu_config != "No GPU":
                     gpu_cost = JUPYTER_GPU_CONFIGS[jupyter_gpu_config]['price']
                     st.write(f"- GPU cost: ${gpu_cost:.2f}/hr")
-                    total_hourly_cost += gpu_cost
+                    direct_hourly_cost += gpu_cost
 
                 # Dataproc costs if applicable
                 if use_dataproc and cost_details['dataproc_details']:
                     dataproc_hourly = cost_details['dataproc_costs'] / analysis_hours
                     st.write(f"- Dataproc cluster cost: ${dataproc_hourly:.2f}/hr")
-                    total_hourly_cost += dataproc_hourly
+                    direct_hourly_cost += dataproc_hourly
 
-            else:
-                # Regular app running cost
-                running_cost = APP_COSTS[app]['running']
-                st.write(f"- Running cost: ${running_cost:.2f}/hr")
-                total_hourly_cost += running_cost
-
-                # Paused cost distributed across analysis hours
-                if paused_hours > 0:
-                    paused_cost = (APP_COSTS[app]['paused'] * paused_hours) / analysis_hours
-                    st.write(f"- Paused cost (distributed): ${paused_cost:.2f}/hr")
-                    total_hourly_cost += paused_cost
-
-                # Storage cost distributed across analysis hours
-                if not delete_environment:
-                    storage_hourly = (APP_COSTS[app]['storage']) * monthly_ratio
-                    st.write(f"- Storage cost (distributed): ${storage_hourly:.2f}/hr")
-                    total_hourly_cost += storage_hourly
-
-        # Cromwell costs if applicable
         if use_cromwell and "Jupyter Notebooks" in apps:
-            st.write("\nCromwell hourly costs:")
+            st.write("\nCromwell costs:")
             cromwell_cost = CROMWELL_HOURLY
             st.write(f"- First application: ${cromwell_cost:.2f}/hr")
-            total_hourly_cost += cromwell_cost
+            direct_hourly_cost += cromwell_cost
             
             if cromwell_apps > 1:
                 additional_cost = CROMWELL_ADDITIONAL_HOURLY * (cromwell_apps - 1)
                 st.write(f"- Additional applications: ${additional_cost:.2f}/hr")
-                total_hourly_cost += additional_cost
+                direct_hourly_cost += additional_cost
 
-        # Workspace costs distributed across analysis hours
-        workspace_hourly = (workspaces * WORKSPACE_COST) * monthly_ratio
-        st.write(f"\nWorkspace cost (distributed): ${workspace_hourly:.2f}/hr")
-        total_hourly_cost += workspace_hourly
-
-        # Bucket storage costs distributed across analysis hours
-        bucket_storage_hourly = (storage * STORAGE_COST_PER_GB) * monthly_ratio
-        st.write(f"Bucket storage cost (distributed): ${bucket_storage_hourly:.2f}/hr")
-        total_hourly_cost += bucket_storage_hourly
-
-        # Total hourly cost
-        st.write(f"\nTotal cost per analysis hour: ${total_hourly_cost:.2f}/hr")
-        st.write("(Fixed monthly costs are distributed across analysis hours)")
+        st.write(f"\nTotal Direct Hourly Costs: ${direct_hourly_cost:.2f}/hr")
         
+        st.write("\nFixed Monthly Costs:")
+        monthly_costs = 0
+
+        # Storage costs
+        if not delete_environment:
+            for app in apps:
+                st.write(f"- {app} persistent disk: ${APP_COSTS[app]['storage']:.2f}/month")
+                monthly_costs += APP_COSTS[app]['storage']
+
+        # Bucket storage
+        bucket_cost = storage * STORAGE_COST_PER_GB
+        st.write(f"- Bucket storage ({storage} GB): ${bucket_cost:.2f}/month")
+        monthly_costs += bucket_cost
+
+        # Workspace costs
+        workspace_cost = workspaces * WORKSPACE_COST
+        st.write(f"- Workspace cost: ${workspace_cost:.2f}/month")
+        monthly_costs += workspace_cost
+
+        st.write(f"\nTotal Monthly Fixed Costs: ${monthly_costs:.2f}/month")
+
+        # Paused Costs
+        if paused_hours > 0:
+            st.write("\nPaused Instance Costs:")
+            paused_costs = 0
+            for app in apps:
+                app_paused_cost = APP_COSTS[app]["paused"] * paused_hours
+                st.write(f"- {app}: ${APP_COSTS[app]['paused']}/hr × {paused_hours} hours = ${app_paused_cost:.2f}")
+                paused_costs += app_paused_cost
+            st.write(f"\nTotal Paused Costs: ${paused_costs:.2f}")
+
+        # Project Total Calculation
+        st.write("\nTotal Project Cost Calculation:")
+        if analysis_type == "WGS":
+            st.write(f"One-time extraction cost: ${cost_details['initial_costs']:.2f}")
+        
+        active_compute = direct_hourly_cost * analysis_hours
+        st.write(f"Active compute costs: ${direct_hourly_cost:.2f}/hr × {analysis_hours} hours = ${active_compute:.2f}")
+        
+        if paused_hours > 0:
+            st.write(f"Paused costs: ${paused_costs:.2f}")
+        
+        total_storage = monthly_costs * project_duration
+        st.write(f"Storage costs: ${monthly_costs:.2f}/month × {project_duration} months = ${total_storage:.2f}")
+        
+        total_project = (cost_details['initial_costs'] + active_compute + 
+                        paused_costs + total_storage)
+        st.write(f"\nTotal Project Cost: ${total_project:.2f}")
+
         st.markdown("---")
+        st.write("Note: This breakdown shows:")
+        st.write("- Direct hourly costs that apply while your instances are running")
+        st.write("- Fixed monthly costs for storage and workspaces")
+        st.write("- Costs during paused periods")
+        st.write("- Total project cost based on your specified duration")
 
         if analysis_type == "WGS":
             st.write("WGS Analysis Costs:")
