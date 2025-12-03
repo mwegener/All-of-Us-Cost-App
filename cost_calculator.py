@@ -127,7 +127,7 @@ def calculate_dataproc_costs(cluster_config, hours, custom_config=None):
 
 def calculate_costs(apps, analysis_type, num_samples, storage, analysis_hours, paused_hours, 
                    workspaces, cromwell_user_type, use_cromwell, cromwell_apps, 
-                   jupyter_config, jupyter_gpu_config, delete_environment,  # Add this parameter
+                   jupyter_config, jupyter_gpu_config, delete_environment, project_duration,
                    use_dataproc=False, dataproc_cluster_config=None, dataproc_custom_config=None):
     # Initialize costs
     running_costs = 0
@@ -136,9 +136,10 @@ def calculate_costs(apps, analysis_type, num_samples, storage, analysis_hours, p
     gpu_costs = 0
     dataproc_costs = 0
     dataproc_details = None
+    initial_costs = 0
+    cromwell_costs = 0
 
-
-# Calculate costs for each app
+    # Calculate costs for each app
     for app in apps:
         if app == "Jupyter Notebooks":
             # VM costs
@@ -162,20 +163,15 @@ def calculate_costs(apps, analysis_type, num_samples, storage, analysis_hours, p
         else:
             running_costs += APP_COSTS[app]["running"] * analysis_hours
             paused_costs += APP_COSTS[app]["paused"] * paused_hours
-            # Only add storage cost if not deleting environment
             if not delete_environment:
                 app_storage_costs += APP_COSTS[app]["storage"]
 
     bucket_storage_costs = storage * STORAGE_COST_PER_GB
     workspace_costs = workspaces * WORKSPACE_COST
 
-    # Initialize WGS and Cromwell costs
-    extraction_costs = 0
-    cromwell_costs = 0
-
     # Calculate WGS costs
     if analysis_type == "WGS":
-        extraction_costs = num_samples * SAMPLE_EXTRACTION_COST
+        initial_costs = num_samples * SAMPLE_EXTRACTION_COST
 
     # Calculate Cromwell costs when used with Jupyter
     if use_cromwell and "Jupyter Notebooks" in apps:
@@ -184,17 +180,16 @@ def calculate_costs(apps, analysis_type, num_samples, storage, analysis_hours, p
             cromwell_additional = CROMWELL_ADDITIONAL_HOURLY * analysis_hours * (cromwell_apps - 1)
             cromwell_costs += cromwell_additional
 
-    # Calculate totals
-    monthly_costs = (running_costs + paused_costs + app_storage_costs + 
-                    bucket_storage_costs + workspace_costs + cromwell_costs + 
-                    gpu_costs + dataproc_costs)
-    initial_costs = extraction_costs
-    total_costs = initial_costs + monthly_costs
+    # Calculate storage costs for project duration
+    monthly_storage_costs = (app_storage_costs + bucket_storage_costs + workspace_costs)
+    total_storage_costs = monthly_storage_costs * project_duration
+
+    # Calculate total project costs
+    total_costs = (initial_costs + running_costs + paused_costs + 
+                  total_storage_costs + gpu_costs + dataproc_costs + cromwell_costs)
 
     return {
         "initial_costs": initial_costs,
-        "monthly_costs": monthly_costs,
-        "total_costs": total_costs,
         "running_costs": running_costs,
         "paused_costs": paused_costs,
         "storage_costs": app_storage_costs,
@@ -203,7 +198,9 @@ def calculate_costs(apps, analysis_type, num_samples, storage, analysis_hours, p
         "cromwell_costs": cromwell_costs,
         "gpu_costs": gpu_costs,
         "dataproc_costs": dataproc_costs,
-        "dataproc_details": dataproc_details
+        "dataproc_details": dataproc_details,
+        "total_storage_costs": total_storage_costs,
+        "total_costs": total_costs
     }
 
 def main():
@@ -354,11 +351,19 @@ def main():
         value=1
     )
 
+    project_duration = st.sidebar.number_input(
+        "Project Duration (months)",
+        min_value=1,
+        value=3,
+        help="Total number of months your project will run"
+    )
+
     # Calculate costs
     cost_details = calculate_costs(
         apps, analysis_type, num_samples, storage, analysis_hours, 
         paused_hours, workspaces, cromwell_user_type, use_cromwell, 
-        cromwell_apps, jupyter_config, jupyter_gpu_config, delete_environment,  # Add this parameter
+        cromwell_apps, jupyter_config, jupyter_gpu_config, delete_environment,
+        project_duration,  # Add this parameter
         use_dataproc, dataproc_cluster_config, dataproc_custom_config
     )
 
@@ -368,7 +373,7 @@ def main():
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.subheader("Upfront Costs")  # Changed from "One-time Costs"
+        st.subheader("Upfront Costs")
         st.write(f"${cost_details['initial_costs']:.2f}")
         st.write("Data extraction fees")
 
@@ -376,6 +381,7 @@ def main():
         st.subheader("Hourly Costs")
         # Calculate total costs for all running hours
         total_running_costs = 0
+        # VM and application running costs
         for app in apps:
             if app == "Jupyter Notebooks":
                 # VM costs
@@ -389,6 +395,10 @@ def main():
             else:
                 total_running_costs += APP_COSTS[app]["running"] * analysis_hours
 
+        # Paused costs
+        total_paused_costs = sum(APP_COSTS[app]["paused"] * paused_hours for app in apps)
+        total_running_costs += total_paused_costs
+
         # Add Cromwell costs if applicable
         if use_cromwell and "Jupyter Notebooks" in apps:
             total_running_costs += CROMWELL_HOURLY * analysis_hours
@@ -396,29 +406,31 @@ def main():
                 total_running_costs += (CROMWELL_ADDITIONAL_HOURLY * analysis_hours * (cromwell_apps - 1))
         
         st.write(f"${total_running_costs:.2f}")
-        st.write("Total active running costs")
+        st.write("Total compute costs")
 
     with col3:
-        st.subheader("Storage Costs")  # Changed from "Total First Month"
-        storage_cost = 0
+        st.subheader("Storage Costs")
+        monthly_storage_cost = 0
+        # Persistent disk storage
         if not delete_environment:
             for app in apps:
-                storage_cost += APP_COSTS[app]["storage"]
-        storage_cost += storage * STORAGE_COST_PER_GB
-        storage_cost += workspaces * WORKSPACE_COST
+                monthly_storage_cost += APP_COSTS[app]["storage"]
+        # Bucket storage
+        monthly_storage_cost += storage * STORAGE_COST_PER_GB
+        # Workspace costs
+        monthly_storage_cost += workspaces * WORKSPACE_COST
         
-        st.write(f"${storage_cost:.2f}/month")
-        st.write("Storage & workspace fees")
+        # Calculate total storage cost for the project duration
+        total_storage_cost = monthly_storage_cost * project_duration
+        
+        st.write(f"${total_storage_cost:.2f}")
+        st.write(f"Storage costs for {project_duration} months")
 
     with col4:
         st.subheader("Total Project Cost")
         # Calculate total project cost
-        total_paused_cost = sum(APP_COSTS[app]["paused"] * paused_hours for app in apps)
-        project_months = (analysis_hours + paused_hours) / 730  # 730 hours in a month
-        total_storage_cost = storage_cost * project_months
         total_project_cost = (cost_details['initial_costs'] + 
                             total_running_costs + 
-                            total_paused_cost + 
                             total_storage_cost)
         
         st.write(f"${total_project_cost:.2f}")
