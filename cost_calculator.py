@@ -78,6 +78,11 @@ DATAPROC_CLUSTER_CONFIGS = {
 }
 
 APP_COSTS = {
+    "Jupyter Notebooks": {
+        "running": 0.20,
+        "paused": 0.01,
+        "storage": 4.80
+    },
     "RStudio": {
         "running": 0.40,
         "paused": 0.21,
@@ -122,8 +127,8 @@ def calculate_dataproc_costs(cluster_config, hours, custom_config=None):
 
 def calculate_costs(apps, analysis_type, num_samples, storage, analysis_hours, paused_hours, 
                    workspaces, cromwell_user_type, use_cromwell, cromwell_apps, 
-                   jupyter_config, jupyter_gpu_config, use_dataproc=False, 
-                   dataproc_cluster_config=None, dataproc_custom_config=None):
+                   jupyter_config, jupyter_gpu_config, delete_environment,  # Add this parameter
+                   use_dataproc=False, dataproc_cluster_config=None, dataproc_custom_config=None):
     # Initialize costs
     running_costs = 0
     paused_costs = 0
@@ -132,13 +137,16 @@ def calculate_costs(apps, analysis_type, num_samples, storage, analysis_hours, p
     dataproc_costs = 0
     dataproc_details = None
 
-    # Calculate costs for each app
+
+# Calculate costs for each app
     for app in apps:
         if app == "Jupyter Notebooks":
             # VM costs
             running_costs += JUPYTER_VM_CONFIGS[jupyter_config]["running"] * analysis_hours
             paused_costs += JUPYTER_VM_CONFIGS[jupyter_config]["paused"] * paused_hours
-            app_storage_costs += 2.00  # Fixed storage cost for Jupyter
+            # Only add storage cost if not deleting environment
+            if not delete_environment:
+                app_storage_costs += APP_COSTS[app]["storage"]
             
             # GPU costs (only applied during running hours)
             gpu_costs += JUPYTER_GPU_CONFIGS[jupyter_gpu_config]["price"] * analysis_hours
@@ -154,7 +162,9 @@ def calculate_costs(apps, analysis_type, num_samples, storage, analysis_hours, p
         else:
             running_costs += APP_COSTS[app]["running"] * analysis_hours
             paused_costs += APP_COSTS[app]["paused"] * paused_hours
-            app_storage_costs += APP_COSTS[app]["storage"]
+            # Only add storage cost if not deleting environment
+            if not delete_environment:
+                app_storage_costs += APP_COSTS[app]["storage"]
 
     bucket_storage_costs = storage * STORAGE_COST_PER_GB
     workspace_costs = workspaces * WORKSPACE_COST
@@ -206,6 +216,11 @@ def main():
         "Select Applications Used",
         ["Jupyter Notebooks", "RStudio", "SAS"],
         default=["Jupyter Notebooks"]
+    )
+
+    delete_environment = st.sidebar.checkbox(
+        "Delete persistent disk environment when not in use?",
+        help="Deleting your environment when not in use saves on monthly persistent disk costs"
     )
 
     # Jupyter, GPU, and Dataproc configuration
@@ -320,15 +335,17 @@ def main():
     )
 
     analysis_hours = st.sidebar.number_input(
-        "Active Analysis Hours per Month",
+        "Active Analysis Hours for Project",  # Changed from "per Month"
         min_value=0,
-        value=40
+        value=40,
+        help="Total number of hours you plan to actively use the environment during your project"
     )
 
     paused_hours = st.sidebar.number_input(
-        "Paused Hours per Month",
+        "Paused Analysis Hours for Project",  # Changed from "per Month"
         min_value=0,
-        value=128
+        value=128,
+        help="Total number of hours your environment will be paused during your project"
     )
 
     workspaces = st.sidebar.number_input(
@@ -341,32 +358,159 @@ def main():
     cost_details = calculate_costs(
         apps, analysis_type, num_samples, storage, analysis_hours, 
         paused_hours, workspaces, cromwell_user_type, use_cromwell, 
-        cromwell_apps, jupyter_config, jupyter_gpu_config, use_dataproc,
-        dataproc_cluster_config, dataproc_custom_config
+        cromwell_apps, jupyter_config, jupyter_gpu_config, delete_environment,  # Add this parameter
+        use_dataproc, dataproc_cluster_config, dataproc_custom_config
     )
 
     # Display results
     st.header("Cost Breakdown")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.subheader("One-time Costs")
+        st.subheader("Upfront Costs")  # Changed from "One-time Costs"
         st.write(f"${cost_details['initial_costs']:.2f}")
         st.write("Data extraction fees")
 
     with col2:
-        st.subheader("Monthly Costs")
-        st.write(f"${cost_details['monthly_costs']:.2f}")
-        st.write("Recurring costs")
+        st.subheader("Hourly Costs")
+        # Calculate total costs for all running hours
+        total_running_costs = 0
+        for app in apps:
+            if app == "Jupyter Notebooks":
+                # VM costs
+                total_running_costs += JUPYTER_VM_CONFIGS[jupyter_config]["running"] * analysis_hours
+                # GPU costs if applicable
+                if jupyter_gpu_config != "No GPU":
+                    total_running_costs += JUPYTER_GPU_CONFIGS[jupyter_gpu_config]["price"] * analysis_hours
+                # Dataproc costs if applicable
+                if use_dataproc and cost_details['dataproc_costs']:
+                    total_running_costs += cost_details['dataproc_costs']
+            else:
+                total_running_costs += APP_COSTS[app]["running"] * analysis_hours
+
+        # Add Cromwell costs if applicable
+        if use_cromwell and "Jupyter Notebooks" in apps:
+            total_running_costs += CROMWELL_HOURLY * analysis_hours
+            if cromwell_apps > 1:
+                total_running_costs += (CROMWELL_ADDITIONAL_HOURLY * analysis_hours * (cromwell_apps - 1))
+        
+        st.write(f"${total_running_costs:.2f}")
+        st.write("Total active running costs")
 
     with col3:
-        st.subheader("Total First Month")
-        st.write(f"${cost_details['total_costs']:.2f}")
-        st.write("One-time + first month")
+        st.subheader("Storage Costs")  # Changed from "Total First Month"
+        storage_cost = 0
+        if not delete_environment:
+            for app in apps:
+                storage_cost += APP_COSTS[app]["storage"]
+        storage_cost += storage * STORAGE_COST_PER_GB
+        storage_cost += workspaces * WORKSPACE_COST
+        
+        st.write(f"${storage_cost:.2f}/month")
+        st.write("Storage & workspace fees")
+
+    with col4:
+        st.subheader("Total Project Cost")
+        # Calculate total project cost
+        total_paused_cost = sum(APP_COSTS[app]["paused"] * paused_hours for app in apps)
+        project_months = (analysis_hours + paused_hours) / 730  # 730 hours in a month
+        total_storage_cost = storage_cost * project_months
+        total_project_cost = (cost_details['initial_costs'] + 
+                            total_running_costs + 
+                            total_paused_cost + 
+                            total_storage_cost)
+        
+        st.write(f"${total_project_cost:.2f}")
+        st.write("Total estimated cost")
 
     # Detailed breakdown
     with st.expander("View Detailed Cost Breakdown"):
+  # Add the hourly cost breakdown at the start
+        st.write("Cost Per Analysis Hour Breakdown:")
+        total_hourly_cost = 0
+
+        # Calculate monthly hours ratio for fixed costs
+        monthly_ratio = analysis_hours / 730 if analysis_hours > 0 else 0  # 730 hours in average month
+
+        for app in apps:
+            st.write(f"\n{app} hourly costs:")
+            if app == "Jupyter Notebooks":
+                # VM running cost
+                vm_cost = JUPYTER_VM_CONFIGS[jupyter_config]['running']
+                st.write(f"- VM running cost: ${vm_cost:.2f}/hr")
+                total_hourly_cost += vm_cost
+
+                # VM paused cost distributed across analysis hours
+                if paused_hours > 0:
+                    paused_cost = (JUPYTER_VM_CONFIGS[jupyter_config]['paused'] * paused_hours) / analysis_hours
+                    st.write(f"- VM paused cost (distributed): ${paused_cost:.2f}/hr")
+                    total_hourly_cost += paused_cost
+
+                # Storage cost distributed across analysis hours
+                if not delete_environment:
+                    storage_hourly = (APP_COSTS[app]['storage']) * monthly_ratio
+                    st.write(f"- Storage cost (distributed): ${storage_hourly:.2f}/hr")
+                    total_hourly_cost += storage_hourly
+
+                # GPU costs if applicable
+                if jupyter_gpu_config != "No GPU":
+                    gpu_cost = JUPYTER_GPU_CONFIGS[jupyter_gpu_config]['price']
+                    st.write(f"- GPU cost: ${gpu_cost:.2f}/hr")
+                    total_hourly_cost += gpu_cost
+
+                # Dataproc costs if applicable
+                if use_dataproc and cost_details['dataproc_details']:
+                    dataproc_hourly = cost_details['dataproc_costs'] / analysis_hours
+                    st.write(f"- Dataproc cluster cost: ${dataproc_hourly:.2f}/hr")
+                    total_hourly_cost += dataproc_hourly
+
+            else:
+                # Regular app running cost
+                running_cost = APP_COSTS[app]['running']
+                st.write(f"- Running cost: ${running_cost:.2f}/hr")
+                total_hourly_cost += running_cost
+
+                # Paused cost distributed across analysis hours
+                if paused_hours > 0:
+                    paused_cost = (APP_COSTS[app]['paused'] * paused_hours) / analysis_hours
+                    st.write(f"- Paused cost (distributed): ${paused_cost:.2f}/hr")
+                    total_hourly_cost += paused_cost
+
+                # Storage cost distributed across analysis hours
+                if not delete_environment:
+                    storage_hourly = (APP_COSTS[app]['storage']) * monthly_ratio
+                    st.write(f"- Storage cost (distributed): ${storage_hourly:.2f}/hr")
+                    total_hourly_cost += storage_hourly
+
+        # Cromwell costs if applicable
+        if use_cromwell and "Jupyter Notebooks" in apps:
+            st.write("\nCromwell hourly costs:")
+            cromwell_cost = CROMWELL_HOURLY
+            st.write(f"- First application: ${cromwell_cost:.2f}/hr")
+            total_hourly_cost += cromwell_cost
+            
+            if cromwell_apps > 1:
+                additional_cost = CROMWELL_ADDITIONAL_HOURLY * (cromwell_apps - 1)
+                st.write(f"- Additional applications: ${additional_cost:.2f}/hr")
+                total_hourly_cost += additional_cost
+
+        # Workspace costs distributed across analysis hours
+        workspace_hourly = (workspaces * WORKSPACE_COST) * monthly_ratio
+        st.write(f"\nWorkspace cost (distributed): ${workspace_hourly:.2f}/hr")
+        total_hourly_cost += workspace_hourly
+
+        # Bucket storage costs distributed across analysis hours
+        bucket_storage_hourly = (storage * STORAGE_COST_PER_GB) * monthly_ratio
+        st.write(f"Bucket storage cost (distributed): ${bucket_storage_hourly:.2f}/hr")
+        total_hourly_cost += bucket_storage_hourly
+
+        # Total hourly cost
+        st.write(f"\nTotal cost per analysis hour: ${total_hourly_cost:.2f}/hr")
+        st.write("(Fixed monthly costs are distributed across analysis hours)")
+        
+        st.markdown("---")
+
         if analysis_type == "WGS":
             st.write("WGS Analysis Costs:")
             st.write(f"- Data extraction (${SAMPLE_EXTRACTION_COST:.2f}/sample × {num_samples:,} samples): ${cost_details['initial_costs']:.2f}")
@@ -405,6 +549,13 @@ def main():
 
         st.write(f"\nBucket Storage ({storage} GB @ ${STORAGE_COST_PER_GB}/GB): ${cost_details['bucket_storage_costs']:.2f}")
         st.write(f"Workspace costs ({workspaces} workspace(s) @ ${WORKSPACE_COST}/workspace): ${cost_details['workspace_costs']:.2f}")
+        st.write("\nPersistent Disk Status:")
+        if delete_environment:
+            st.write("- Environments will be deleted when not in use (no persistent disk costs)")
+        else:
+            st.write("- Environments will be maintained when not in use")
+            for app in apps:
+                st.write(f"  - {app} persistent disk cost: ${APP_COSTS[app]['storage']:.2f}/month")
 
     # Notes section
     st.markdown("---")
