@@ -378,7 +378,7 @@ def main():
         st.write("Data extraction fees")
 
     with col2:
-        st.subheader("Hourly Costs")
+        st.subheader("Total Compute Costs")
         # Calculate total costs for all running hours
         total_running_costs = 0
         # VM and application running costs
@@ -406,7 +406,7 @@ def main():
                 total_running_costs += (CROMWELL_ADDITIONAL_HOURLY * analysis_hours * (cromwell_apps - 1))
         
         st.write(f"${total_running_costs:.2f}")
-        st.write("Total compute costs")
+        st.write("(Active Analysis Hours * 0.40) + (Paused Analysis Hours * 0.01)")
 
     with col3:
         st.subheader("Storage Costs")
