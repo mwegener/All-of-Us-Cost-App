@@ -406,7 +406,7 @@ def main():
                 total_running_costs += (CROMWELL_ADDITIONAL_HOURLY * analysis_hours * (cromwell_apps - 1))
         
         st.write(f"${total_running_costs:.2f}")
-        st.write("$$(Active_{hours} * 0.40) + (Paused_{hours} * 0.01)$$")
+        st.write("`(Active Hours × 0.40) + (Paused Hours × 0.01)`")
 
     with col3:
         st.subheader("Storage Costs")
